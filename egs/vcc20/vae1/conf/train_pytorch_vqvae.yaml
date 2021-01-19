@@ -1,0 +1,61 @@
+# Training config
+trainer_type: vae_npvc.trainer.basic
+dataset_type: vae_npvc.dataset.utt2mel_spk
+max_iter: 1000000
+iters_per_checkpoint: 20000
+iters_per_log: 1000
+
+seed: 777
+
+num_jobs: 8
+prefetch_factor: 2
+
+batch_size: 128
+crop_length: 256
+
+# Optimizer param
+optim_type: Adam
+learning_rate: 0.001
+max_grad_norm: 10
+# LR scheduler 
+lr_scheduler: StepLR
+lr_param:
+    step_size: 100000
+    gamma: 0.5
+    last_epoch: -1
+
+# Model config
+model_type: vae_npvc.model.vqvae
+y_dim: 128
+y_num: 117
+z_dim: 128
+z_num: 128
+use_ema: true
+beta: 0.01
+mu: 0.9
+jitter_p: 0.0
+encoder:
+    in_channels: [80]
+    out_channels: [512]
+    kernel_size: 3
+    downsample_scales: [1]
+    z_channels: 128
+    dilation: false
+    stack_kernel_size: 3
+    stack_layers: 1
+    stacks: [10]
+    use_weight_norm: true
+    use_causal_conv: false 
+decoder:
+    in_channels: [128]
+    out_channels: [512]
+    cond_channels: 128
+    skip_channels: 128
+    final_channels: 80
+    kernel_size: 3
+    upsample_scales: [1]
+    dilation: false
+    stack_kernel_size: 3
+    stacks: [10]
+    use_weight_norm: true
+    use_causal_conv: false
