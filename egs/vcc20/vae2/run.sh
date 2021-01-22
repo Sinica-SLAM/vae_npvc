@@ -26,7 +26,7 @@ n_shift=256   # number of shift points
 win_length="" # window length
 
 # config files
-train_config=conf/train_pytorch_vqvae.yaml
+train_config=conf/train_pytorch_vqvae2.yaml
 decode_config=conf/decode.yaml
 
 # decoding related
@@ -141,7 +141,7 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
         --config ${train_config}
 fi
 
-outdir=${expdir}/outputs_${model}_$(basename ${decode_config%.*})
+outdir=${expdir}/outputs_${model}_$(basename ${train_config%.*})
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     echo "stage 5: Decoding"
     pids=() # initialize pids
@@ -150,7 +150,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         [ ! -e ${outdir}/${name} ] && mkdir -p ${outdir}/${name}
         cp ${dumpdir}/${name}/feats.scp ${outdir}/${name}
         # decode in parallel
-        vc_decode.py \
+        decode.py \
             --gpu ${gpu} \
             --out ${outdir}/${name}/feats \
             --model ${expdir}/results/${model} \

@@ -7,7 +7,7 @@ import math
 
 
 class VectorQuantizer(nn.Module):
-    def __init__(self, z_num, z_dim, normalize=False, reduction='sum'):
+    def __init__(self, z_num, z_dim, normalize=False, reduction='frame_mean'):
         super(VectorQuantizer, self).__init__()
 
         if normalize:
@@ -109,27 +109,37 @@ class VectorQuantizer(nn.Module):
         z_vq = embeddings.index_select(dim=0, index=encoding_idx)
 
         # Calculate losses
-        if self.training:
-            encodings = torch.zeros(encoding_idx.size(0), embeddings.size(0)+1, device=z.device)
-            encodings.scatter_(1, encoding_idx.unsqueeze(1), 1)
+        encodings = torch.zeros(encoding_idx.size(0), embeddings.size(0)+1, device=z.device)
+        encodings.scatter_(1, encoding_idx.unsqueeze(1), 1)
 
-            avg_probs = torch.sum(encodings[:,:-1], dim=0) / encodings.size(0)
-            perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
-            update_detail = dict(entropy=perplexity)
+        avg_probs = torch.sum(encodings[:,:-1], dim=0) / encodings.size(0)
+        perplexity = torch.exp(-torch.sum(avg_probs * torch.log(avg_probs + 1e-10)))
+        update_detail = {'entropy': perplexity.item()}
 
-            z_qut_loss = F.mse_loss(z_vq, z_norm.detach(), reduction=self.reduction)
-            z_enc_loss = F.mse_loss(z_vq.detach(), z_norm, reduction=self.reduction)
-            if self.target_norm:
-                z_enc_loss += F.mse_loss(z_norm, z, reduction=self.reduction)    # Normalization loss
-            if self.reduction == 'none':
-                z_qut_loss = z_qut_loss.view(B,T,D)
-                z_enc_loss = z_enc_loss.view(B,T,D)
-                if time_last:
-                    z_qut_loss = z_qut_loss.transpose(1,2)
-                    z_enc_loss = z_enc_loss.transpose(1,2)                    
+        z_qut_loss = F.mse_loss(z_vq, z_norm.detach(), reduction='none')
+        z_enc_loss = F.mse_loss(z_vq.detach(), z_norm, reduction='none')
+        if self.target_norm:
+            z_enc_loss += F.mse_loss(z_norm, z, reduction='none')    # Normalization loss
+        if self.reduction == 'sum':
+            z_qut_loss = z_qut_loss.sum()
+            z_enc_loss = z_enc_loss.sum()
+        elif self.reduction == 'mean':
+            z_qut_loss = z_qut_loss.mean()
+            z_enc_loss = z_enc_loss.mean()
+        elif self.reduction == 'batch_mean':
+            z_qut_loss = z_qut_loss.sum() / B
+            z_enc_loss = z_enc_loss.sum() / B
+        elif self.reduction == 'frame_mean':
+            z_qut_loss = z_qut_loss.sum() / (B*T)
+            z_enc_loss = z_enc_loss.sum() / (B*T)
+        elif self.reduction == 'none':
+            z_qut_loss = z_qut_loss.view(B,T,D)
+            z_enc_loss = z_enc_loss.view(B,T,D)
+            if time_last:
+                z_qut_loss = z_qut_loss.transpose(1,2)
+                z_enc_loss = z_enc_loss.transpose(1,2)                    
 
-            z_vq = z_norm + (z_vq-z_norm).detach()
-
+        z_vq = z_norm + (z_vq-z_norm).detach()
 
         # Deflatten
         z_vq = z_vq.view(B, T, D)
@@ -137,10 +147,7 @@ class VectorQuantizer(nn.Module):
             z_vq = z_vq.transpose(1,2).contiguous()
 
         # Output
-        if self.training:
-            return z_vq, z_qut_loss, z_enc_loss, update_detail
-        else:
-            return z_vq
+        return z_vq, z_qut_loss, z_enc_loss, update_detail
 
 
     def sparsity(self):
@@ -157,7 +164,7 @@ class VectorQuantizer(nn.Module):
 
 
 class EMAVectorQuantizer(nn.Module):
-    def __init__(self, z_num, z_dim, mu, reduction='sum'):
+    def __init__(self, z_num, z_dim, mu, threshold=1.0, reduction='frame_mean'):
         super(EMAVectorQuantizer, self).__init__()
 
         self.register_buffer('emb_init', torch.tensor(0).bool())
@@ -168,7 +175,7 @@ class EMAVectorQuantizer(nn.Module):
         self.mu = mu
         self.z_num = z_num
         self.z_dim = z_dim
-        self.threshold = 1.0
+        self.threshold = threshold
         self.reduction = reduction
         self.quantize = True
         self.update = True
@@ -218,10 +225,12 @@ class EMAVectorQuantizer(nn.Module):
             usage = torch.sum(usage)
             dk = torch.norm(self.embeddings - old_embeddings) / np.sqrt(np.prod(old_embeddings.shape))
 
-        return dict(entropy=entropy,
-                    used_curr=used_curr,
-                    usage=usage,
-                    dk=dk)
+        return {    
+            'entropy': entropy.item(),
+            'used_curr': used_curr.item(),
+            'usage': usage.item(),
+            'diff_emb': dk.item()
+        }
 
 
     def encode(self, z, time_last=True):
@@ -283,18 +292,25 @@ class EMAVectorQuantizer(nn.Module):
             z_vq = self.embeddings.index_select(dim=0, index=encoding_idx)
 
         # Update codebook with EMA
-        if self.training:
-            if self.update:
-                update_detail = self.update_emb(z, encoding_idx)
-            else:
-                update_detail = dict()
+        if self.update and self.training:
+            update_detail = self.update_emb(z, encoding_idx)
+        else:
+            update_detail = dict()
 
-            z_qut_loss = 0.0
-            z_enc_loss = F.mse_loss(z_vq.detach(), z, reduction=self.reduction)
-            if self.reduction == 'none':
-                z_enc_loss = z_enc_loss.view(B,T,D)
-                if time_last:
-                    z_enc_loss = z_enc_loss.transpose(1,2)                    
+        z_qut_loss = 0.0
+        z_enc_loss = F.mse_loss(z_vq.detach(), z, reduction='none')
+        if self.reduction == 'sum':
+            z_enc_loss = z_enc_loss.sum()
+        elif self.reduction == 'mean':
+            z_enc_loss = z_enc_loss.mean()
+        elif self.reduction == 'batch_mean':
+            z_enc_loss = z_enc_loss.sum() / B
+        elif self.reduction == 'frame_mean':
+            z_enc_loss = z_enc_loss.sum() / (B*T)
+        elif self.reduction == 'none':
+            z_enc_loss = z_enc_loss.view(B,T,D)
+            if time_last:
+                z_enc_loss = z_enc_loss.transpose(1,2)                    
 
             z_vq = z + (z_vq-z).detach()
 
@@ -304,10 +320,7 @@ class EMAVectorQuantizer(nn.Module):
             z_vq = z_vq.transpose(1,2).contiguous()
 
         # Output
-        if self.training:
-            return z_vq, z_qut_loss, z_enc_loss, update_detail
-        else:
-            return z_vq
+        return z_vq, z_qut_loss, z_enc_loss, update_detail
 
 
     def sparsity(self):
@@ -338,7 +351,7 @@ class Jitter(nn.Module):
         self._probability = probability
 
     def forward(self, quantized):
-        if self._probability == 0.0:
+        if self._probability == 0.0 or not self.training:
             return quantized
 
         original_quantized = quantized.detach().clone()

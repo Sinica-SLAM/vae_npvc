@@ -73,53 +73,21 @@ class Model(nn.Module):
         y = self.embeds(y_idx).transpose(1,2).contiguous()    # Size( N, y_dim, 1)
         # Encode
         z = self.encoder(x)
-
+        # Quantize
+        z_vq, z_qut_loss, z_enc_loss, vq_detail = self.quantizer(z)
+        z_vq = self.jitter(z_vq)
         # Decode
-        if self.training:
-            z_vq, z_qut_loss, z_enc_loss, vq_detail = self.quantizer(z)
-            z_vq = self.jitter(z_vq)
+        xhat = self.decoder((z_vq, y))
+        # Loss
+        x_loss = log_loss(xhat, x)
+        loss = x_loss + z_qut_loss + self.beta * z_enc_loss
+        # Detail
+        losses = {'Total': loss.item(),
+                  'VQ loss': z_enc_loss.item(),
+                  'X like': x_loss.item()}
+        losses.update(vq_detail)
 
-            xhat = self.decoder((z_vq, y))
-
-            # Loss
-            Batch, Dim, Time = x.shape
-            mean_factor = Batch * Time
-
-            z_qut_loss = z_qut_loss / mean_factor
-            z_enc_loss = z_enc_loss / mean_factor
-            
-            x_loss = log_loss(xhat, x) / mean_factor
-
-            loss = x_loss + z_qut_loss + self.beta * z_enc_loss
-            
-            losses = {'Total': loss.item(),
-                      'VQ loss': z_enc_loss.item(),
-                      'entropy': vq_detail['entropy'].item(),
-                      'usage_batch': vq_detail['used_curr'].item(),
-                      'usage': vq_detail['usage'].item(),
-                      'diff_emb': vq_detail['dk'].item(),
-                      'X like': x_loss.item()}
-
-            return xhat, loss, losses
-
-        else:
-            z_vq = self.quantizer(z)
-            xhat = self.decoder((z_vq,y))
-
-            # Loss
-            Batch, Dim, Time = x.shape
-            mean_factor = Batch * Time
-
-            z_loss = (z - z_vq).pow(2).sum() / mean_factor
-            x_loss = log_loss(xhat, x) / mean_factor
-
-            loss = x_loss + z_loss
-
-            losses = {'Total': loss.item(),
-                      'VQ loss': z_loss.item(),
-                      'X like': x_loss.item()}
-
-            return losses
+        return xhat, loss, losses
 
 
     def remove_weight_norm(self):

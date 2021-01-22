@@ -10,7 +10,7 @@ LOG_2PI = math.log( 2.0 * math.pi)
 class Trainer(object):
     def __init__(self, config):
         learning_rate  = config.get('learning_rate', 1e-4)
-        model_type     = config.get('model_type', 'vae_npvc.model.vqvae')
+        model_type     = config.get('model_type', 'vae_npvc.model.vqvae:Model').split(':')
         optim_type     = config.get('optim_type', 'Adam')
         learning_rate  = config.get('learning_rate', 1)
         max_grad_norm  = config.get('max_grad_norm', 5)
@@ -21,9 +21,9 @@ class Trainer(object):
                                         'last_epoch': -1
                                     })
 
-        module = import_module(model_type, package=None)
-        MODEL = getattr(module, 'Model')
-        model = MODEL(config)
+        module = import_module(model_type[0], package=None)
+        model_name = 'Model' if len(model_type) < 2 else model_type[1]
+        model = getattr(module, model_name)(config)
 
         self.model = model.cuda()
         self.learning_rate = learning_rate
@@ -58,8 +58,6 @@ class Trainer(object):
 
         input = [x.cuda() for x in input]
         output, loss, loss_detail = self.model(input)
-
-        loss_detail['Total'] = loss.item()
 
         loss.backward()
         if self.max_grad_norm > 0:
@@ -98,7 +96,7 @@ class Trainer(object):
 
         with torch.no_grad():
             input = [x.cuda() for x in input]
-            loss_detail = self.model(input)
+            output, loss, loss_detail = self.model(input)
 
         self.model.train()
 

@@ -29,8 +29,8 @@ def train(args):
 
     config = yaml.safe_load(open(args.config))
 
-    trainer_type         = config.get('trainer_type', 'vae_npvc.trainer.basic')
-    dataset_type         = config.get('dataset_type', 'vae_npvc.dataset.utt2mel_spkid')
+    trainer_type         = config.get('trainer_type', 'vae_npvc.trainer.basic:Trainer').split(':')
+    dataset_type         = config.get('dataset_type', 'vae_npvc.dataset.utt2mel_spkid:Dataset').split(':')
     max_iter             = config.get('max_iter', 100000)
     iters_per_checkpoint = config.get('iters_per_checkpoint', 10000)
     iters_per_log        = config.get('iters_per_log', 1000)
@@ -44,8 +44,9 @@ def train(args):
     torch.cuda.manual_seed(seed)
 
     # Initial trainer
-    trainer_module = import_module(trainer_type, package=None)
-    trainer = getattr( trainer_module, 'Trainer')(config)
+    trainer_module = import_module(trainer_type[0], package=None)
+    trainer_name = 'Trainer' if len(trainer_type) < 2 else trainer_type[1]
+    trainer = getattr( trainer_module, trainer_name)(config)
 
     # Load checkpoint if the path is given 
     iteration = 1
@@ -54,8 +55,9 @@ def train(args):
         iteration += 1  # next iteration is iteration + 1
 
     # Load training data
-    dataset_module = import_module(dataset_type, package=None)
-    Dataset = getattr( dataset_module, 'Dataset')
+    dataset_module = import_module(dataset_type[0], package=None)
+    dataset_name = 'Dataset' if len(dataset_type) < 2 else dataset_type[1]
+    Dataset = getattr( dataset_module, dataset_name)
     try:
         collate_fn = getattr( dataset_module, 'collate')
     except:

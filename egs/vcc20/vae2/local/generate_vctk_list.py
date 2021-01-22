@@ -53,11 +53,11 @@ for speaker_dir in sorted(list(data_root.glob('*'))):
         data_path = str(data_file.absolute())
         data_command = 'sox {} -c 1 -r {} -b 16 -t wav - |'.format(data_path, args.fs)
         data_num = int(data_name.split('_')[-1])
-        if data_num <= 25:
+        if data_num <= 0:
             wf_test_wavscp.write('{} {}\n'.format(data_name,data_command))
             wf_test_utt2spk.write('{} {}\n'.format(data_name,speaker_name))
             test_spk2utt[speaker_name].append(data_name)
-        elif data_num > 25 and data_num <= 50:
+        elif data_num > 0 and data_num <= 50:
             wf_dev_wavscp.write('{} {}\n'.format(data_name,data_command))
             wf_dev_utt2spk.write('{} {}\n'.format(data_name,speaker_name))
             dev_spk2utt[speaker_name].append(data_name)

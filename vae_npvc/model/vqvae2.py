@@ -14,15 +14,24 @@ class Model(nn.Module):
 
         encoders = list()
         quantizers = list()
+        decoders = list()
         levels = arch.get('levels', 3)
+        use_gst = arch.get('use_gst',True)
+        use_ema = arch.get('use_ema',True)
         for i in range(levels):
-            encoders.append(Encoder(**arch['encoder.{}'.format(i)]))
-            Quantizer = StyleTokenLayer if i == levels - 1 else EMAVectorQuantizer
-            quantizers.append(Quantizer(**arch['quantizer.{}'.format(i)]))
-
+            encoders.append(Encoder(**arch[f'encoder.{i}']))
+            decoders.append(Decoder(**arch[f'decoder.{i}']))
+            if use_gst and i == levels - 1:
+                Quantizer = StyleTokenLayer
+            elif use_ema:
+                Quantizer = EMAVectorQuantizer
+            else:
+                Quantizer = VectorQuantizer
+            quantizers.append(Quantizer(**arch[f'quantizer.{i}']))
+            
         self.encoders = nn.ModuleList(encoders)
         self.quantizers = nn.ModuleList(quantizers)
-        self.decoder = Decoder(**arch['decoder'])
+        self.decoders = nn.ModuleList(decoders)
 
         self.embeds = Conditions(
             arch.get('y_num', 10),
@@ -34,6 +43,7 @@ class Model(nn.Module):
         
         self.beta = arch.get('beta', 0.01)
         self.levels = levels
+        self.use_gst = use_gst
 
 
     def encode(self, input):
@@ -64,81 +74,73 @@ class Model(nn.Module):
     def forward(self, input):
         # Preprocess
         x, y_idx = input    # ( Size( N, x_dim, nframes), Size( N, 1))
-        y = self.embeds(y_idx).transpose(1,2).contiguous()    # Size( N, y_dim, 1)
-        # Encode
+        y = self.embeds(y_idx[...,:1]).transpose(1,2).contiguous()    # Size( N, y_dim, 1)
+        # Init. lists
         z_levels = list()
+        z_vq_levels = list()
+        time_levels = list()
+        z_qut_losses = list()
+        z_enc_losses = list()
+        vq_details = list()
+        # Hierarchical encode
+        x_ = x
+        time_levels.append(x.size(-1))
         for i in range(self.levels):
-            x = self.encoders[i](x)
-            z_levels.append(z)
-        Batch, Dim, Time = z_levels[0].size(-1)
+            z_, x_ = self.encoders[i](x_)
+            z_levels.append(z_)
+            time_levels.append(z_.size(-1))
+        # Hierarchical decode & quantize
+        z_ = z_levels.pop()
+        for i in reversed(range(self.levels)):
+            # Quantize
+            if self.use_gst and i == self.levels - 1:
+                z_vq = self.quantizers[i](z_.mean(dim=-1)).unsqueeze(-1)
+            else:
+                z_vq, z_qut_loss, z_enc_loss, vq_detail = self.quantizers[i](z_)
+                z_qut_losses.append(z_qut_loss)
+                z_enc_losses.append(z_enc_loss)
+                vq_detail['quanti_err'] = z_enc_loss.item()
+                vq_details.append(vq_detail)
+                z_vq = self.jitter(z_vq)
+            z_vq_levels.append([self.upsample(z_vq,t) for t in time_levels[:i+1]])
+            # Decode
+            if i > 0:
+                z_ = z_levels.pop()
+                # Concat all quantized z for decoding
+                z_vq = torch.cat([z_vqs[i] for z_vqs in z_vq_levels],dim=1)
+                z_ = self.decoders[i]((z_, z_vq))   
+        # Final Decode
+        z_vq = torch.cat([z_vqs[0] for z_vqs in z_vq_levels],dim=1)
+        xhat = self.decoders[0]((z_vq, self.upsample(y, time_levels[0])))
+        # Loss
+        z_qut_loss = sum(z_qut_losses)
+        z_enc_loss = sum(z_enc_losses)
+        x_loss = log_loss(xhat, x)
+        loss = x_loss + z_qut_loss + self.beta * z_enc_loss
+        # Detail
+        losses = {'Total': loss.item(),
+                  'VQ loss': z_enc_loss.item(),
+                  'X like': x_loss.item()}
+        for i, vq_detail in enumerate(vq_details):
+            losses.update({key+f'.{i}': val for key, val in vq_detail.items()})
 
-        # Decode
-        if self.training:
-            z_qut_losses = list()
-            z_enc_losses = list()
-            z_vq_levels = list()
-            vq_details = list()
-            for i in range(levels):
-                if i == levels - 1:
-                    z_vq = self.quantizer[i](z_levels[i])
-                else:
-                    z_vq, z_qut_loss, z_enc_loss, vq_detail = self.quantizer[i](z_levels[i])
-                    z_qut_losses.append(z_qut_loss / (Batch * z_vq.size(-1)))
-                    z_enc_losses.append(z_enc_loss / (Batch * z_vq.size(-1)))
-                    vq_details.append(vq_detail)
-                    z_vq = self.jitter(z_vq)
+        return xhat, loss, losses
 
-                z_vq = z_vq.unsqueeze(2).repeat(1,1,Time//z_vq.size(3),1)
-                z_vq = z_vq.view(Batch,Dim,-1)[...,:Time]
-                z_vq_levels.append(z_vq)
 
-            z_vq = torch.cat(z_vq_levels, dim=1)
-
-            xhat = self.decoder((z_vq, y))
-
-            # Loss
-            x_loss = log_loss(xhat, x) / (Batch * Time)
-            loss = x_loss + sum(z_qut_losses) + self.beta * sum(z_enc_losses)
- 
-            losses = {'Total': loss.item(),
-                      'VQ loss': z_enc_losses.item(),
-                      'X like': x_loss.item()}
-            for i, vq_detail in enumerate(vq_details):
-                losses.update({
-                    f'entropy.{i}': vq_detail['entropy'].item(),
-                    f'usage_batch.{i}': vq_detail['used_curr'].item(),
-                    f'usage.{i}': vq_detail['usage'].item(),
-                    f'diff.emb.{i}': vq_detail['dk'].item(),
-                    f'vq_loss.{i}': z_enc_losses[i].item(),
-                })
-
-            return xhat, loss, losses
-
+    def upsample(self, z, target_len):
+        """Upsample the last dim of input z"""
+        z_len = z.size(-1)
+        repeat = [1 for i in range(z.ndim)]
+        repeat.append(target_len // z_len)
+        z = z.unsqueeze(-1).repeat(*repeat)
+        z = z.flatten(-2,-1)
+        z_len = z.size(-1)
+        if z_len >= target_len:
+            z = z[...,:target_len]
         else:
-            z_vq_levels = list()
-            vq_details = list()
-            for i in range(levels):
-                z_vq = self.quantizer[i](z_levels[i])
-                z_loss = (z - z_vq).pow(2).sum() / (Batch * z_vq.size(-1))
-                vq_details.append(z_loss)
-                z_vq = z_vq.unsqueeze(2).repeat(1,1,Time//z_vq.size(3),1)
-                z_vq = z_vq.view(Batch,Dim,-1)[...,:Time]
-                z_vq_levels.append(z_vq)
-
-            z_vq = torch.cat(z_vq_levels, dim=1)
-            xhat = self.decoder((z_vq,y))
-
-            # Loss
-            x_loss = log_loss(xhat, x) / (Batch * Time)
-
-            loss = x_loss + z_loss
-
-            losses = {'Total': loss.item(),
-                      'X like': x_loss.item()}
-            for i, z_loss in enumerate(vq_details):
-                losses[f'VQ loss.{i}'] = z_loss.item()
-
-            return losses
+            diff_len = target_len - z_len
+            z = F.pad(z, (0, diff_len), 'replicate')
+        return z
 
 
     def remove_weight_norm(self):
@@ -193,7 +195,7 @@ class Encoder(nn.Module):
         layers = []
 
         for ( in_channel, out_channel, ds_scale, stack) in zip( in_channels, out_channels, downsample_scales, stacks):
-
+            # Down-sampling or not
             if ds_scale == 1:
                 _kernel_size = kernel_size
                 _padding = (kernel_size - 1) // 2
@@ -221,10 +223,10 @@ class Encoder(nn.Module):
 
             layers += [nn.LeakyReLU(negative_slope=0.2),]
 
-        # add final layer
-        layers += [nn.Conv1d( out_channels[-1], z_channels, 1)]
-
         self.encode = nn.Sequential(*layers)
+
+        # add final layer
+        self.z_proj = nn.Conv1d( out_channels[-1], z_channels, 1)
 
         # apply weight norm
         if use_weight_norm:
@@ -240,7 +242,8 @@ class Encoder(nn.Module):
         Returns:
             Tensor: Output tensor (B, out_channels, T).
         """
-        return self.encode(input)
+        input = self.encode(input)
+        return self.z_proj(input), input
 
     def remove_weight_norm(self):
         def _remove_weight_norm(m):
@@ -350,17 +353,16 @@ class Decoder(nn.Module):
         """Calculate forward propagation.
         Args:
             x (Tensor): Input tensor (B, in_channels, T).
-            c (Tensor): Input tensor (B, cond_channels, 1).
+            c (Tensor): Input tensor (B, cond_channels, T).
         Returns:
             Tensor: Output tensor (B, out_channels, T).
         """
         # return self.decode(x)
         x, c = input
         x_out = 0.0
-        c = c[:,:,:1]
         for layer in self.layers:
             if isinstance(layer, DeConv1d_Layernorm_GLU_ResSkip):
-                x, x_skip = layer( x, c.repeat(1,1,x.size(2)))
+                x, x_skip = layer( x, c)
                 x_out += x_skip
             else:
                 x = layer(x)

@@ -273,6 +273,17 @@ def skl_loss(mu1, lv1, mu2, lv2):
     v1, v2 = torch.exp(lv1), torch.exp(lv2)
     return 0.5 * ( v2/v1 + v1/v2 - 2 + (mu1 - mu2).pow(2) / ( 1/v1 + 1/v2) ).sum()
 
-def log_loss(x, mu):
+def log_loss(x, mu, reduction='frame_mean'):
     # Simplified from GaussianLogDensity
-    return 0.5 * (LOG_2PI + (x - mu).pow(2)).sum()
+    B, D, T = x.shape
+    loss = 0.5 * (LOG_2PI + (x - mu).pow(2))
+    if reduction == 'sum':
+        return loss.sum()
+    elif reduction == 'mean':
+        return loss.mean()
+    elif reduction == 'batch_mean':
+        return loss.sum() / B
+    elif reduction == 'frame_mean':
+        return loss.sum() / (B*T)
+    elif reduction == 'none':
+        return loss

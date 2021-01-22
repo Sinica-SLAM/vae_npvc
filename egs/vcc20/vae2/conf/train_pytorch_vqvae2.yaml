@@ -1,0 +1,125 @@
+# Training config
+trainer_type: vae_npvc.trainer.basic
+dataset_type: vae_npvc.dataset.utt2mel_spk
+max_iter: 1000000
+iters_per_checkpoint: 20000
+iters_per_log: 1000
+
+seed: 777
+
+num_jobs: 8
+prefetch_factor: 2
+
+batch_size: 96
+crop_length: 256
+
+# Optimizer param
+optim_type: Adam
+learning_rate: 0.001
+max_grad_norm: 10
+# LR scheduler 
+lr_scheduler: StepLR
+lr_param:
+    step_size: 100000
+    gamma: 0.5
+    last_epoch: -1
+
+# Model config
+model_type: vae_npvc.model.vqvae2
+levels: 3
+y_dim: 128
+y_num: 117
+beta: 0.01
+use_gst: true
+use_ema: false
+jitter_p: 0.0
+encoder.0:
+    in_channels: [80]
+    out_channels: [512]
+    kernel_size: 3
+    downsample_scales: [1]
+    z_channels: 128
+    dilation: false
+    stack_kernel_size: 3
+    stack_layers: 1
+    stacks: [6]
+    use_weight_norm: true
+    use_causal_conv: false
+encoder.1:
+    in_channels: [512,512]
+    out_channels: [512,512]
+    kernel_size: 3
+    downsample_scales: [2,2]
+    z_channels: 128
+    dilation: false
+    stack_kernel_size: 3
+    stack_layers: 1
+    stacks: [3,3]
+    use_weight_norm: true
+    use_causal_conv: false 
+encoder.2:
+    in_channels: [512,512]
+    out_channels: [512,512]
+    kernel_size: 3
+    downsample_scales: [4,4]
+    z_channels: 128
+    dilation: false
+    stack_kernel_size: 3
+    stack_layers: 1
+    stacks: [3,3]
+    use_weight_norm: true
+    use_causal_conv: false
+quantizer.0:
+    z_dim: 128
+    z_num: 512
+    normalize: true
+    # mu: 0.9
+quantizer.1:
+    z_dim: 128
+    z_num: 512
+    normalize: true
+    # mu: 0.9
+quantizer.2:
+    ref_embed_dim: 128
+    gst_tokens: 10
+    gst_token_dim: 128
+    gst_heads: 4
+decoder.0:
+    in_channels: [384]
+    out_channels: [512]
+    cond_channels: 128
+    skip_channels: 128
+    final_channels: 80
+    kernel_size: 3
+    upsample_scales: [1]
+    dilation: false
+    stack_kernel_size: 3
+    stacks: [10]
+    use_weight_norm: true
+    use_causal_conv: false
+decoder.1:
+    in_channels: [128]
+    out_channels: [512]
+    cond_channels: 256
+    skip_channels: 128
+    final_channels: 128
+    kernel_size: 3
+    upsample_scales: [1]
+    dilation: false
+    stack_kernel_size: 3
+    stacks: [6]
+    use_weight_norm: true
+    use_causal_conv: false
+decoder.2:
+    in_channels: [128]
+    out_channels: [512]
+    cond_channels: 128
+    skip_channels: 128
+    final_channels: 128
+    kernel_size: 3
+    upsample_scales: [1]
+    dilation: false
+    stack_kernel_size: 3
+    stacks: [6]
+    use_weight_norm: true
+    use_causal_conv: false
