@@ -13,6 +13,7 @@ import time
 import logging
 from pathlib import Path
 from importlib import import_module
+from shutil import copyfile
 
 import numpy as np
 
@@ -34,6 +35,7 @@ def train(args):
     max_iter             = config.get('max_iter', 100000)
     iters_per_checkpoint = config.get('iters_per_checkpoint', 10000)
     iters_per_log        = config.get('iters_per_log', 1000)
+    check_loss_kind      = config.get('check_loss_kind', 'X like')
     num_jobs             = config.get('num_jobs', 8)
     prefetch_factor      = config.get('prefetch_factor', 2)
     seed                 = config.get('seed', 777)
@@ -71,7 +73,6 @@ def train(args):
         pin_memory=True,
         drop_last=True,
         collate_fn=collate_fn,
-        prefetch_factor=prefetch_factor,
     )
 
     # Load validation data
@@ -85,7 +86,6 @@ def train(args):
             pin_memory=True,
             drop_last=False,
             collate_fn=collate_fn,
-            prefetch_factor=prefetch_factor,
         )
     except:
         valid_set, valid_loader = [], None
@@ -117,9 +117,8 @@ def train(args):
     logger.info("Start traininig...")
 
     train_log = dict()
-    best_model = None
-    best_loss = np.inf
-    check_loss = 'loss'
+    best_loss = {check_loss_kind: np.inf}
+    best_iter = 0
 
     while iteration <= max_iter:
         for i, batch in enumerate(train_loader):    
@@ -142,22 +141,36 @@ def train(args):
 
             # Save model per N iterations
             if iteration % iters_per_checkpoint == 0:
-                output_name = "{}_{}".format(time.strftime("%m-%d_%H-%M", time.localtime()), iteration)
-                checkpoint_path =  output_dir / output_name
+                # output_name = "{}_{}".format(time.strftime("%m-%d_%H-%M", time.localtime()), iteration)
+                output_name = "iter.{}".format(iteration)
+                checkpoint_path = output_dir / output_name
                 trainer.save_checkpoint( checkpoint_path)
                 logger.info("Saved state dict. to {}".format(checkpoint_path))
 
             # Validation per N iterations
             if iteration % iters_per_checkpoint == 0 and valid_loader is not None:
                 loss_detail = trainer.valid(valid_loader)
+
+                best_check_loss = np.mean(best_loss[check_loss_kind])
+                check_loss = np.mean(loss_detail[check_loss_kind])
+                if best_check_loss >= check_loss:
+                    best_loss = loss_detail
+                    best_iter = iteration
+
                 mseg = 'Valid {}:'.format( iteration)
                 for key,val in loss_detail.items():
                     mseg += '  {}: {:.6f}'.format(key,np.mean(val))
+                mseg += '  |  Best {}:  {}: {:.6f}'.format(best_iter, check_loss_kind, best_check_loss)
                 logger.info(mseg)
 
             # Check if finished
             if iteration > max_iter:
                 break
+
+    mseg = 'Best model: iteration: {}'.format( best_iter)
+    for key,val in best_loss.items():
+        mseg += '  {}: {:.6f}'.format(key, np.mean(val))
+    copyfile(str(output_dir / 'iter.{}'.format(best_iter)), str(output_dir / 'model.loss.best'))
 
     logger.info("Finished")
         

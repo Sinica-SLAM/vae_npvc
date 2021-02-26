@@ -206,7 +206,10 @@ class DeConv1d_Layernorm_GLU_ResSkip(nn.Module):
                                 padding=padding, dilation=dilation, bias=True)
             self.norm_layer = None
 
-        self.conv_cond = nn.Conv1d(cond_channels, in_channels*2, 1, bias=True)
+        if cond_channels is not None and cond_channels > 0:
+            self.conv_cond = nn.Conv1d(cond_channels, in_channels*2, 1, bias=True)
+        else:
+            self.conv_cond = None
         self.res_skip_layers = nn.Conv1d(in_channels, in_channels+skip_channels, 1, bias=True)
 
         self.in_channels = in_channels
@@ -224,11 +227,15 @@ class DeConv1d_Layernorm_GLU_ResSkip(nn.Module):
         if self.dropout > 0.0:
             x = F.dropout(x, p=self.dropout, training=self.training)
         x_res = self.conv_in(x)
+        if self.conv_cond:
+            x_c = self.conv_cond(c)
+        else:
+            x_c = 0.0
 
         if not self.use_causal_conv:
-            x_res = self.norm_layer(x_res + self.conv_cond(c))
+            x_res = self.norm_layer(x_res + x_c)
         else:
-            x_res = x_res[..., :x.size(-1)] + self.conv_cond(c)
+            x_res = x_res[..., :x.size(-1)] + x_c
         
         x_res_tanh = torch.tanh(x_res[:,:self.in_channels])
         x_res_sigmoid = torch.sigmoid(x_res[:,self.in_channels:])

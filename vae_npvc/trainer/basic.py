@@ -12,7 +12,7 @@ class Trainer(object):
         learning_rate  = config.get('learning_rate', 1e-4)
         model_type     = config.get('model_type', 'vae_npvc.model.vqvae:Model').split(':')
         optim_type     = config.get('optim_type', 'Adam')
-        learning_rate  = config.get('learning_rate', 1)
+        learning_rate  = config.get('learning_rate', 1e-3)
         max_grad_norm  = config.get('max_grad_norm', 5)
         lr_scheduler   = config.get('lr_scheduler', None)
         lr_param       = config.get('lr_param', {

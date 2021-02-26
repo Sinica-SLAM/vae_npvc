@@ -14,55 +14,40 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument('data_dir', type=str,
                     help='directory to the list')
-parser.add_argument('-s','--source_list', type=str, default=[], nargs='+',
+parser.add_argument('-s','--source', type=str, default='',
                     help='Name of source speaker')
-parser.add_argument('-t','--target_list', type=str, default=[], nargs='+',
-                    help='Name of source speaker')
-parser.add_argument('-n','--num_of_trials', type=int, default=20,
-                    help='Number of trials')
-parser.add_argument('-p','--parallel', action='store_true',
-                    help='It\'s parallel data or not')
+parser.add_argument('-t','--target', type=str, default='',
+                    help='Name of target speaker')
+parser.add_argument('-f','--format', type=str, default='S-T',
+                    help='trials format. "S" for "Source", "T" for "Target"')
 args = parser.parse_args()
 
 data_dir = Path(args.data_dir)
 
-source_list = [None] if len(args.source_list) == 0 else args.source_list
-target_list = [None] if len(args.target_list) == 0 else args.target_list    
+source = None if len(args.source) == 0 else args.source
+target = None if len(args.target) == 0 else args.target
+assert target is not None
 
-with open(data_dir / 'spk2utt','r') as rf:
-    spk2utt = [line.rstrip().split() for line in rf.readlines()]
+spk_format = args.format.split('-')
 
-spk2utt = dict([[line[0],line[1:]] for line in spk2utt])
-spk_list = spk2utt.keys()
-spk_num = len(spk_list)
+with open(data_dir / 'utt2spk','r') as rf:
+    utt2spk = [line.rstrip().split() for line in rf.readlines()]
 
 with open(data_dir / 'trials','w') as wf:
     n_trials = 0
-    for source_name_ in source_list:
-        for target_name_ in target_list:
-            for n in range(args.num_of_trials):
-                if source_name_ is None:
-                    spk_idx = np.random.randint(0, spk_num)
-                    source_name = spk_list[spk_idx]
-                else:
-                    source_name = source_name_
+    for utt,spk in utt2spk:
+        if source and spk != source:
+            continue
 
-                if target_name_ is None:
-                    spk_idx = np.random.randint(0, spk_num)
-                    target_name = spk_list[spk_idx]
-                else:
-                    target_name = target_name_
+        trial = [utt]
+        for spk_kind in spk_format:
+            if spk_kind.upper() in ['S','SOURCE']:
+                trial.append(spk)
+            elif spk_kind.upper() in ['T','TARGET']:
+                trial.append(target)
+        trial = ' '.join(trial)
 
-                num_utts = len(spk2utt[source_name])
-                idx = n if n < num_utts else n%num_utts
-                source_utt = spk2utt[source_name][idx+10]
+        wf.write('{}\n'.format(trial))
+        print('Trial {}: {}'.format(n_trials, trial))
 
-                if args.parallel and idx < len(spk2utt[target_name]):
-                    target_utt = spk2utt[target_name][idx]
-                    wf.write('{} {} {} {}\n'.format(source_utt, source_name, target_utt, target_name))
-                    print('Trial {}: {} {} {} {}'.format(n_trials, source_utt, source_name, target_utt, target_name))
-                else:
-                    wf.write('{} {} {}\n'.format(source_utt, source_name, target_name))
-                    print('Trial {}: {} {} {}'.format(n_trials, source_utt, source_name, target_name))
-
-                n_trials += 1
+        n_trials += 1

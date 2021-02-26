@@ -29,7 +29,7 @@ model_type: vae_npvc.model.vqvae
 y_dim: 128
 y_num: 117
 z_dim: 128
-z_num: 128
+z_num: 512
 use_ema: true
 beta: 0.01
 mu: 0.9

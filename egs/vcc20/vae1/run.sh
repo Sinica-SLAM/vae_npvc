@@ -141,7 +141,7 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
         --config ${train_config}
 fi
 
-outdir=${expdir}/outputs_${model}_$(basename ${decode_config%.*})
+outdir=${expdir}/outputs_${model}_decode
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     echo "stage 5: Decoding"
     pids=() # initialize pids
@@ -165,12 +165,14 @@ fi
 if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
     echo "stage 6: Synthesis"
     pids=() # initialize pids
-    for name in ${dev_set} ${eval_set}; do
+    # for name in ${pair_dev_set} ${pair_eval_set}; do
+    for name in ${pair_eval_set}; do
     (
         [ ! -e ${outdir}_denorm/${name} ] && mkdir -p ${outdir}_denorm/${name}
         apply-cmvn --norm-vars=true --reverse=true data/${train_set}/cmvn.ark \
             scp:${outdir}/${name}/feats.scp \
             ark,scp:${outdir}_denorm/${name}/feats.ark,${outdir}_denorm/${name}/feats.scp
+
         # GL
         if [ ${voc} = "GL" ]; then
             echo "Using Griffin-Lim phase recovery."
@@ -190,10 +192,10 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
         elif [ ${voc} = "PWG" ] || [ ${voc} = "MG" ]; then
             if [ ${voc} = "PWG" ]; then
                 echo "Using Parallel WaveGAN vocoder."
-                voc_expdir=exp/PWG_80dim_mel8k_44kHz_hop5ms
+                voc_expdir=exp/parallel_wavegan
             else
                 echo "Using Multi-Band MelGAN vocoder."
-                voc_expdir=exp/PWG_80dim_mel8k_44kHz_hop5ms
+                voc_expdir=exp/multiband_melgan
             fi
             # check existence
             if [ ! -d ${voc_expdir} ]; then
@@ -217,7 +219,7 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
                     --skip-wav-copy \
                     --config "${voc_conf}" \
                     --stats "${voc_stats}" \
-                    --feats-scp "${outdir}/${name}/feats.scp" \
+                    --feats-scp "${outdir}_denorm/${name}/feats.scp" \
                     --dumpdir ${hdf5_norm_dir} \
                     --verbose "${verbose}"
             echo "successfully finished normalization."
@@ -243,4 +245,19 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
     i=0; for pid in "${pids[@]}"; do wait ${pid} || ((i++)); done
     [ ${i} -gt 0 ] && echo "$0: ${i} background jobs are failed." && false
     echo "Finished."
+fi
+
+if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
+    echo "stage 7: Objective Evaluation"
+    # for name in ${pair_dev_set} ${pair_eval_set}; do
+    for name in ${pair_eval_set}; do
+        local/ob_eval/evaluate.sh --nj ${nj} \
+            --db_root ${vcc20gtdir} \
+            --vocoder ${voc} \
+            ${outdir} ${name}
+        local/ob_eval/evaluate_similarity.sh --nj ${nj} \
+            --db_root ${vcc20gtdir} \
+            --vocoder ${voc} \
+            ${outdir} ${name}        
+    done
 fi
